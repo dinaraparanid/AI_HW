@@ -17,7 +17,7 @@ public final class Main {
     private static final int VERTICAL = 1;
 
     private static final float MAX_FITNESS_CRITERIA_WEIGHT = 1F;
-    private static final int FITNESS_WORD_CRITERIA_AMOUNT = 1;
+    private static final int FITNESS_WORD_CRITERIA_AMOUNT = 2;
 
     private static final float INCLUDE_PARENT_PROBABILITY = 0.25F;
     private static final float MUTATION_RATE = 0.33F;
@@ -125,6 +125,16 @@ public final class Main {
     private record FitnessWithIndex(float fitness, int index) {}
 
     /**
+     * Container for those words that will be mutated
+     * and those that will stay the same
+     *
+     * @param mutatedWords words that will be mutated
+     * @param notMutatedWords words that will stay the same
+     */
+
+    private record MutationSelection(List<WordState> mutatedWords, List<WordState> notMutatedWords) {}
+
+    /**
      * Filename and the generated crossword result
      * @param filename input file name
      * @param result result of crossword generation
@@ -220,30 +230,47 @@ public final class Main {
 
     private static Optional<TableState> generateForFile(final String filename) {
         try (final var reader = new BufferedReader(new FileReader(filename))) {
-            final var words = reader.lines().toList();
+            final var words = readWords(reader);
             final var random = SecureRandom.getInstanceStrong();
+            var genSteps = 1;
 
             // -------- Generation loop --------
 
-            for (var population = initialPopulation(words, random);;) {
+            for (var population = initialPopulation(words, random);; ++genSteps) {
                 final var selected = selectWithRoulette(population, random);
                 population = nextPopulation(selected, random);
 
                 final var fitnessValues = fitnessValues(population);
                 final var maxFitness = maxFitness(fitnessValues);
 
-                // 1 + 1 <- graph connectivity + words crossing
+                // 1 + 1 <- graph connectivity + words crossing & not following
 
                 if (maxFitness.fitness >= 2F) {
-                    System.out.printf("DONE FOR %s:", filename);
+                    System.out.printf("DONE for %s in %d generation steps (fitness = %f)\n", filename, genSteps, maxFitness.fitness);
+
                     final var res = population.get(maxFitness.index);
-                    printTable(population.get(maxFitness.index));
-                    return Optional.of(res);
+                    printTable(population.get(maxFitness.index).table);
+
+                    final var avgFitness = averageFitness(fitnessValues);
+                    printFitnessValues(maxFitness.fitness, avgFitness);
+
+                    final var fixedOrder = reorderWordStates(words, res.words);
+                    return Optional.of(new TableState(res.table, fixedOrder));
                 }
             }
         } catch (final Exception ignored) {
             return Optional.empty();
         }
+    }
+
+    /**
+     * Reads words from input file and filters empty strings
+     * @param reader file reader
+     * @return input files
+     */
+
+    private static List<String> readWords(final BufferedReader reader) {
+        return reader.lines().filter(l -> !l.isEmpty() && !l.isBlank()).toList();
     }
 
     /**
@@ -262,11 +289,11 @@ public final class Main {
 
     /**
      * Prints the given table state to the console
-     * @param tableState The table state to be printed
+     * @param table table to be printed
      */
 
-    private static void printTable(final TableState tableState) {
-        for (final var row : tableState.table) {
+    private static void printTable(final char[][] table) {
+        for (final var row : table) {
             for (final var c : row)
                 System.out.printf("%c ", c == 0 ? '_' : c);
             System.out.println();
@@ -309,7 +336,6 @@ public final class Main {
         final var table = new char[TABLE_SIZE][TABLE_SIZE];
         final var horizontalWords = new ArrayList<WordState>();
         final var verticalWords = new ArrayList<WordState>();
-
         final var wordStates = wordStates(words, table, horizontalWords, verticalWords, random);
         return new TableState(table, wordStates);
     }
@@ -528,6 +554,9 @@ public final class Main {
         if (startColumn + word.length() >= TABLE_SIZE)
             return false;
 
+        if (followedHorizontal(word, startRow, startColumn, table))
+            return false;
+
         for (int x = startColumn; x < startColumn + word.length(); ++x)
             if (table[startRow][x] != 0 && table[startRow][x] != word.charAt(x - startColumn))
                 return false;
@@ -564,6 +593,9 @@ public final class Main {
         if (startRow + word.length() >= TABLE_SIZE)
             return false;
 
+        if (followedVertical(word, startRow, startColumn, table))
+            return false;
+
         for (int y = startRow; y < startRow + word.length(); ++y)
             if (table[y][startColumn] != 0 && table[y][startColumn] != word.charAt(y - startRow))
                 return false;
@@ -575,6 +607,97 @@ public final class Main {
                 .noneMatch(w -> tooBigNeighbouringBorderVertical(wordState, w)
                         || adjacentVertical(wordState, w)
                 );
+    }
+
+    /**
+     * Checks if the word is adjacent with others, but not crossed.
+     * Example: "b_e_x_a_m" - b does not belong to the word "exam"
+     *
+     * @param word word to be placed onto the table
+     * @param startRow starting row coordinate for the word
+     * @param startColumn starting column coordinate for the word
+     * @param layout layout of the word: 0 - horizontal, 1 - vertical
+     * @param table table in which to place the word
+     * @return true if the word is followed by other words
+     */
+
+    private static boolean followed(
+            final String word,
+            final int startRow,
+            final int startColumn,
+            final int layout,
+            final char[][] table
+    ) {
+        return layout == HORIZONTAL
+                ? followedHorizontal(word, startRow, startColumn, table)
+                : followedVertical(word, startRow, startColumn, table);
+    }
+
+    /**
+     * Checks if the word is adjacent with others, but not crossed.
+     * Example: "b_e_x_a_m" - b does not belong to the word "exam"
+     *
+     * @param wordState word state to be placed onto the table
+     * @param table table in which to place the word
+     * @return true if the word is followed by other words
+     */
+
+    private static boolean followed(final WordState wordState, final char[][] table) {
+        return followed(wordState.word, wordState.startRow, wordState.startColumn, wordState.layout, table);
+    }
+
+    /**
+     * Checks if the horizontal word is adjacent with others, but not crossed.
+     * Example: "b_e_x_a_m" - b does not belong to the word "exam"
+     *
+     * @param word word to be placed in the table
+     * @param startRow starting row coordinate for the word
+     * @param startColumn starting column coordinate for the word
+     * @param table table in which to place the word
+     * @return true if the word is followed by other words
+     */
+
+    private static boolean followedHorizontal(
+            final String word,
+            final int startRow,
+            final int startColumn,
+            final char[][] table
+    ) {
+        if (startColumn > 0)
+            if (table[startRow][startColumn - 1] != 0)
+                return true;
+
+        if (startColumn + word.length() + 1 < TABLE_SIZE)
+            return table[startRow][startColumn + word.length()] != 0;
+
+        return false;
+    }
+
+    /**
+     * Checks if the vertical word is adjacent with others, but not crossed.
+     * Example: "b_e_x_a_m" - b does not belong to the word "exam"
+     *
+     * @param word word to be placed in the table
+     * @param startRow starting row coordinate for the word
+     * @param startColumn starting column coordinate for the word
+     * @param table table in which to place the word
+     * @return true if the word is followed by other words
+     */
+
+    private static boolean followedVertical(
+            final String word,
+            final int startRow,
+            final int startColumn,
+            final char[][] table
+    ) {
+        if (startRow > 0)
+            if (table[startRow - 1][startColumn] != 0)
+                return true;
+
+        if (startRow + word.length() + 1 < TABLE_SIZE)
+            return table[startRow + word.length()][startColumn] != 0;
+
+        return false;
     }
 
     /**
@@ -717,8 +840,8 @@ public final class Main {
             final Collection<WordState> horizontalWords,
             final Collection<WordState> verticalWords
     ) {
-        if (wordState.layout == HORIZONTAL) putHorizontalWord(wordState, table, horizontalWords);
-        else putVerticalWord(wordState, table, verticalWords);
+        if (wordState.layout == HORIZONTAL) putWordHorizontal(wordState, table, horizontalWords);
+        else putWordVertical(wordState, table, verticalWords);
     }
 
     /**
@@ -730,7 +853,7 @@ public final class Main {
      * @param horizontalWords horizontal words placed in the table
      */
 
-    private static void putHorizontalWord(
+    private static void putWordHorizontal(
             final WordState wordState,
             final char[][] table,
             final Collection<WordState> horizontalWords
@@ -749,7 +872,7 @@ public final class Main {
      * @param verticalWords vertical words placed in the table
      */
 
-    private static void putVerticalWord(
+    private static void putWordVertical(
             final WordState wordState,
             final char[][] table,
             final Collection<WordState> verticalWords
@@ -849,14 +972,16 @@ public final class Main {
         final var wordStates = tableState.words;
         final var wordsCoords = wordsCoords(wordStates);
         final var wordsCrosses = wordsCrosses(wordsCoords);
-        final var wordsFitness = wordsFitness(wordStates, wordsCrosses);
+        final var wordsFitness = wordsFitness(wordStates, tableState.table, wordsCrosses);
         final float connectivityFitness = longestConnectivity(wordsCrosses);
         return new TableFitnessState(tableState, wordsFitness, connectivityFitness / wordStates.size());
     }
 
     /**
-     * Calculates the fitness of each word, considering words' crosses.
+     * Calculates the fitness of each word, considering words' crosses and borders with others.
      * If the word is crossed at least once - result is 1, otherwise - 0.
+     * If the word is followed with other words (e.g. "b_e_x_a_m" <- b not in "exam"),
+     * then the result is 0, otherwise - 1
      *
      * @param wordStates list of words to evaluate
      * @param wordsCrosses map representing the words' intersections
@@ -865,13 +990,14 @@ public final class Main {
 
     private static List<WordFitnessState> wordsFitness(
             final List<WordState> wordStates,
+            final char[][] table,
             final Map<WordState, Collection<WordState>> wordsCrosses
     ) {
         return wordStates
                 .stream()
                 .map(wordState -> new WordFitnessState(
                         wordState,
-                        wordFitness(wordState, wordsCrosses)
+                        wordFitness(wordState, table, wordsCrosses)
                 ))
                 .toList();
     }
@@ -974,17 +1100,20 @@ public final class Main {
     /**
      * Calculates the word fitness based on the intersections.
      * If the word is crossed at least once - result is 1, otherwise - 0
+     * If the word is followed with other words (e.g. "b_e_x_a_m" <- b not in "exam"),
+     * then the result is 0, otherwise - 1
      *
      * @param wordState the word state to evaluate
      * @param wordsCrosses map representing word intersections
-     * @return If the word is crossed at least once - 1, otherwise - 0
+     * @return word's fitness value
      */
 
     private static float wordFitness(
             final WordState wordState,
+            final char[][] table,
             final Map<WordState, Collection<WordState>> wordsCrosses
     ) {
-        return wordCrossed(wordState, wordsCrosses) / FITNESS_WORD_CRITERIA_AMOUNT;
+        return (wordCrossed(wordState, wordsCrosses) + notFollowed(wordState, table)) / FITNESS_WORD_CRITERIA_AMOUNT;
     }
 
     /**
@@ -1124,12 +1253,19 @@ public final class Main {
         return wordsCrosses.get(wordState).isEmpty() ? 0F : MAX_FITNESS_CRITERIA_WEIGHT;
     }
 
+    private static float notFollowed(
+            final WordState wordState,
+            final char[][] table
+    ) {
+        return followed(wordState, table) ? 0F : MAX_FITNESS_CRITERIA_WEIGHT;
+    }
+
     // ---------------------------- NEXT POPULATION ----------------------------
 
     /**
      * Generates the next population of table states
      * based on the selected parents.
-     * Applies both {@link Main#crossover(TableState, TableState, Random)} and {@link Main#mutation(TableState)}
+     * Applies both {@link Main#crossover(TableState, TableState, Random)} and {@link Main#mutation(TableState, Random)}
      *
      * @param selected selected table states to improve
      * @param random random generator
@@ -1150,7 +1286,7 @@ public final class Main {
     /**
      * Generates a collection of child table states
      * by performing Applies both {@link Main#crossover(TableState, TableState, Random)}
-     * and {@link Main#mutation(TableState)} on selected parents.
+     * and {@link Main#mutation(TableState, Random)} on selected parents.
      * With probability of {@link Main#INCLUDE_PARENT_PROBABILITY},
      * may pick one random parent.
      *
@@ -1168,7 +1304,8 @@ public final class Main {
         final var parent2 = randomElement(selected, random);
 
         final var child = crossover(parent1, parent2, random);
-        final var mutatedChild = mutation(child);
+        final var mutatedChild = mutation(child, random);
+
         tables.add(mutatedChild);
 
         if (random.nextFloat(0F, 1F) <= INCLUDE_PARENT_PROBABILITY)
@@ -1576,7 +1713,7 @@ public final class Main {
      * picks the last one as the component, from which first ceil(size * MUTATION_RATE)
      * words have to be intersected with other connectivity components.
      * For such mutated words, it tries to cross them with others,
-     * using {@link Main#mergedOrSameWords(Collection, char[][], Collection, Collection)}.
+     * using {@link Main#mergedOrNewWords(Collection, char[][], Collection, Collection, Random)}.
      * In case of failure, position remains the same.
      *
      * @param tableState the table state to mutate
@@ -1584,28 +1721,53 @@ public final class Main {
      * @see Main#nextChildWithMbParent(List, Random)
      */
 
-    private static TableState mutation(final TableState tableState) {
+    private static TableState mutation(final TableState tableState, final Random random) {
         final var table = new char[TABLE_SIZE][TABLE_SIZE];
         final var wordStatesMap = new HashMap<String, WordState>();
         final var horizontalWords = new ArrayList<WordState>();
         final var verticalWords = new ArrayList<WordState>();
 
         final var connectivityComponents = connectivityComponents(tableState.words);
-        final var notMutatedWords = notMutatedWordStates(connectivityComponents);
-        putWords(notMutatedWords, table, horizontalWords, verticalWords, wordStatesMap);
+        final var mutationSelection = mutationSelection(connectivityComponents, random);
 
-        final var mergableComponent = last(connectivityComponents).stream().toList();
-        final var maxWordsToMutate = (int) Math.ceil(mergableComponent.size() * MUTATION_RATE);
-        final var mutatedWords = mergableComponent.subList(0, maxWordsToMutate);
+        final var notMutatedWords = mutationSelection.notMutatedWords;
+        putWords(notMutatedWords, table, horizontalWords, verticalWords);
+        putWordsToMap(notMutatedWords, wordStatesMap);
 
-        final var sameWords = mergableComponent.subList(maxWordsToMutate, mergableComponent.size());
-        putWords(sameWords, table, horizontalWords, verticalWords, wordStatesMap);
-
-        final var mergedOrSameWords = mergedOrSameWords(mutatedWords, table, horizontalWords, verticalWords);
-        putWords(mergedOrSameWords, table, horizontalWords, verticalWords, wordStatesMap);
+        final var mutatedWords = mutationSelection.mutatedWords;
+        final var mergedOrNewWords = mergedOrNewWords(mutatedWords, table, horizontalWords, verticalWords, random);
+        putWordsToMap(mergedOrNewWords, wordStatesMap);
 
         final var wordStates = reorderWordStates(tableState.words, wordStatesMap);
         return new TableState(table, wordStates);
+    }
+
+    /**
+     * Choose connectivity components whose words
+     * will be mutated and those that will stay the same,
+     * then combines their words into two lists (mutated and not)
+     *
+     * @param connectivityComponents list of sets of words that are connected
+     * @param random random generator
+     * @return lists of both mutated words and not mutated words
+     * @see Main#mutation(TableState, Random)
+     */
+
+    private static MutationSelection mutationSelection(
+            final List<Set<WordState>> connectivityComponents,
+            final Random random
+    ) {
+        final var mutatedWords = new ArrayList<WordState>();
+        final var notMutatedWords = new ArrayList<WordState>();
+
+        connectivityComponents.forEach(comp -> {
+            if (random.nextFloat(0, 1) <= MUTATION_RATE)
+                mutatedWords.addAll(comp);
+            else
+                notMutatedWords.addAll(comp);
+        });
+
+        return new MutationSelection(mutatedWords, notMutatedWords);
     }
 
     /**
@@ -1617,18 +1779,25 @@ public final class Main {
      * @param horizontalWords list of horizontal word states
      * @param verticalWords list of vertical word states
      * @return list of word states, either merged or kept the same
-     * @see Main#mutation(TableState)
+     * @see Main#mutation(TableState, Random)
      */
 
-    private static List<WordState> mergedOrSameWords(
+    private static List<WordState> mergedOrNewWords(
             final Collection<WordState> mutatedWords,
             final char[][] table,
             final Collection<WordState> horizontalWords,
-            final Collection<WordState> verticalWords
+            final Collection<WordState> verticalWords,
+            final Random random
     ) {
         return mutatedWords
                 .stream()
-                .map(wordState -> tryPutCrossing(wordState, table, horizontalWords, verticalWords).orElse(wordState))
+                .map(wordState -> tryPutCrossing(wordState, table, horizontalWords, verticalWords)
+                        .map(word -> {
+                            putWord(word, table, horizontalWords, verticalWords);
+                            return word;
+                        })
+                        .orElseGet(() -> wordState(wordState.word, table, horizontalWords, verticalWords, random))
+                )
                 .toList();
     }
 
@@ -1651,6 +1820,26 @@ public final class Main {
     }
 
     /**
+     * Reorders the word states based on their original order in the canonical order list
+     * @param canonicalOrder list of words from the input
+     * @param wordStates word states in the table
+     * @return list of word states in the original order
+     */
+
+    private static List<WordState> reorderWordStates(
+            final List<String> canonicalOrder,
+            final List<WordState> wordStates
+    ) {
+        final var wordStatesMap = new HashMap<String, WordState>();
+        putWordsToMap(wordStates, wordStatesMap);
+
+        return canonicalOrder
+                .stream()
+                .map(wordStatesMap::get)
+                .toList();
+    }
+
+    /**
      * Identifies connectivity components among word states
      * based on their coordinates and crossing relationships
      *
@@ -1665,64 +1854,25 @@ public final class Main {
         return connectivityComponents(wordsCrosses);
     }
 
-    /**
-     * Retrieves the words from connectivity components except the last one
-     * @param connectivityComponents lhe list of connectivity components
-     * @return A collection of words that will not mutate
-     */
-
-    private static Collection<WordState> notMutatedWordStates(
-            final List<Set<WordState>> connectivityComponents
-    ) { return notMutatedWordStates(notMutatedComponents(connectivityComponents)); }
+    private static void putWords(
+            final Collection<WordState> wordStates,
+            final char[][] table,
+            final Collection<WordState> horizontalWords,
+            final Collection<WordState> verticalWords
+    ) { wordStates.forEach(word -> putWord(word, table, horizontalWords, verticalWords)); }
 
     /**
-     * Extracts all connectivity components except the last one
-     * @param connectivityComponents list of connectivity components
-     * @return collection of connectivity components excluding the last one
-     */
-
-    private static Collection<Set<WordState>> notMutatedComponents(
-            final List<Set<WordState>> connectivityComponents
-    ) { return connectivityComponents.subList(0, connectivityComponents.size() - 1); }
-
-    /**
-     * Retrieves the words from connectivity components except the last one
-     * @param notMutatedComponents non-mutated connectivity components (all except the last one)
-     * @return non-mutated word states from
-     */
-
-    private static Collection<WordState> notMutatedWordStates(
-            final Collection<Set<WordState>> notMutatedComponents
-    ) {
-        return notMutatedComponents
-                .stream()
-                .flatMap(Collection::stream)
-                .toList();
-    }
-
-    /**
-     * Places a collection of non-mutated word states
-     * onto the table and updates the corresponding lists
+     * Places a collection of word states
+     * onto the map to further reorder them
      *
-     * @param notMutatedWords non-mutated word states
-     * @param table the table to place words
-     * @param horizontalWords list of horizontal word states
-     * @param verticalWords list of vertical word states
+     * @param wordStates word states to place
      * @param wordStatesMap map associating words to corresponding word states
      */
 
-    private static void putWords(
-            final Collection<WordState> notMutatedWords,
-            final char[][] table,
-            final Collection<WordState> horizontalWords,
-            final Collection<WordState> verticalWords,
+    private static void putWordsToMap(
+            final Collection<WordState> wordStates,
             final Map<String, WordState> wordStatesMap
-    ) {
-        notMutatedWords.forEach(word -> {
-            putWord(word, table, horizontalWords, verticalWords);
-            wordStatesMap.put(word.word, word);
-        });
-    }
+    ) { wordStates.forEach(word -> wordStatesMap.put(word.word, word)); }
 
     // ---------------------------- UTILS ----------------------------
 
@@ -1749,5 +1899,34 @@ public final class Main {
     private static <T> T last(final List<T> list) {
         if (list.isEmpty()) throw new IllegalStateException("List is empty");
         return list.get(list.size() - 1);
+    }
+
+    // ---------------------------- STATISTICS ----------------------------
+
+    /**
+     * Sums all fitness values and divides
+     * the result on the number of fitness values
+     * @param fitnessValues list of fitness values
+     * @return average fitness value
+     */
+
+    private static float averageFitness(final List<Float> fitnessValues) {
+        final var sum = fitnessValues
+                .stream()
+                .reduce(Float::sum)
+                .orElse(0F);
+
+        return sum / fitnessValues.size();
+    }
+
+    /**
+     * Prints both fitness values to stdout
+     * @param maxFitness best fitness value
+     * @param avgFitness average fitness value
+     */
+
+    private static void printFitnessValues(final float maxFitness, final float avgFitness) {
+        System.out.printf("Average fitness value: %f\n", avgFitness);
+        System.out.printf("Max fitness value: %f", maxFitness);
     }
 }
