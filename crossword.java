@@ -22,7 +22,7 @@ public final class ArsenySavchenko {
     private static final float INCLUDE_PARENT_PROBABILITY = 0.25F;
     private static final float MUTATION_RATE = 0.33F;
 
-    private static final String PATH = "src/main/java/assignment2/students/ArsenySavchenko";
+    private static volatile String PATH;
 
     private static final boolean DEBUG = true;
 
@@ -149,6 +149,15 @@ public final class ArsenySavchenko {
     // ------------------------- GENERATION -------------------------
 
     public static void main(final String[] args) {
+        final var inputsOpt = findInputs();
+
+        if (inputsOpt.isEmpty()) {
+            System.out.println("Folder 'inputs' was not found in 'ArsenySavchenko' folder");
+            return;
+        }
+
+        PATH = inputsOpt.get().replace("/inputs", "");
+
         System.out.printf(
                 "Required outputs folder: %s\n",
                 new File(String.format("%s/outputs", PATH)).getAbsolutePath()
@@ -163,12 +172,189 @@ public final class ArsenySavchenko {
                     .map(filename -> new FilenameWithGenerationResult(filename, generateForFile(filename)))
                     .filter(res -> res.result.isPresent())
                     .forEach(fileWithTable -> printTableToFile(fileWithTable.result.get(), fileWithTable.filename));
-        } catch (final NullPointerException e) {
-            System.out.println(
-                    "Input and output folders are not found." +
-                    " Please, edit PATH variable (ArsenySavchenko.java:25) in the code"
-            );
+        } catch (final Exception ignored) {
         }
+    }
+
+    /**
+     * Generates crossword for the given file
+     * @param filename given input file name
+     * @return obtained table, if generation is successful
+     */
+
+    private static Optional<TableState> generateForFile(final String filename) {
+        try (final var reader = new BufferedReader(new FileReader(inputFilename(filename)))) {
+            final var words = readWords(reader);
+            final var random = SecureRandom.getInstanceStrong();
+
+            // -------- Generation loop --------
+
+            for (int genSteps = 1;; genSteps = 1) { // restart if too many steps
+                for (var population = initialPopulation(words, random); genSteps <= 1000; ++genSteps) {
+                    final var selected = selectWithRoulette(population, random);
+                    population = nextPopulation(selected, random);
+
+                    final var fitnessValues = fitnessValues(population);
+                    final var maxFitness = maxFitness(fitnessValues);
+
+                    // 1 + 1 <- graph connectivity + words crossing & not following
+
+                    if (maxFitness.fitness >= 2F) {
+                        if (DEBUG) System.out.printf(
+                                "DONE for %s in %d generation steps\n",
+                                filename, genSteps
+                        );
+
+                        final var res = population.get(maxFitness.index);
+                        if (DEBUG) printTable(population.get(maxFitness.index).table);
+
+                        final var fixedOrder = reorderWordStates(words, res.words);
+                        return Optional.of(new TableState(res.table, fixedOrder));
+                    }
+                }
+            }
+        } catch (final Exception ignored) {
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Reads words from input file and filters empty strings
+     * @param reader file reader
+     * @return input files
+     */
+
+    private static List<String> readWords(final BufferedReader reader) {
+        return reader.lines().filter(l -> !l.isEmpty() && !l.isBlank()).toList();
+    }
+
+    /**
+     * Calculates maximum fitness value with the corresponding index
+     * @param fitnessValues the list of fitness values
+     * @return the maximum fitness value and its corresponding index
+     */
+
+    private static FitnessWithIndex maxFitness(final List<Float> fitnessValues) {
+        return IntStream
+                .range(0, fitnessValues.size())
+                .mapToObj(i -> new FitnessWithIndex(fitnessValues.get(i), i))
+                .max((a, b) -> Float.compare(a.fitness, b.fitness))
+                .orElseGet(() -> new FitnessWithIndex(fitnessValues.get(0), 0));
+    }
+
+    /**
+     * Prints the given table state to the console
+     * @param table table to be printed
+     */
+
+    private static void printTable(final char[][] table) {
+        for (final var row : table) {
+            for (final var c : row)
+                System.out.printf("%c ", c == 0 ? '_' : c);
+            System.out.println();
+        }
+    }
+
+    // ------------------------- FILE SYSTEM -------------------------
+
+    /**
+     * Searches for the folder ~/ArsenySavchenko/inputs explicitly,
+     * recursively running DFS from the project root's directory.
+     * @return ~/ArsenySavchenko/inputs or empty optional, if directory was not found
+     */
+
+    private static Optional<String> findInputs() {
+        final var mes = findFolders(".*ArsenySavchenko");
+
+        if (mes.isEmpty()) {
+            System.out.println(
+                    "Folder 'ArsenySavchenko' was not found." +
+                            " Are you sure you put file into the correct folder?"
+            );
+            return Optional.empty();
+        }
+
+        return mes
+                .stream()
+                .parallel()
+                .map(me -> findFolder(me, ".*inputs"))
+                .filter(Optional::isPresent)
+                .findFirst()
+                .flatMap(Function.identity());
+    }
+
+    /**
+     * Searches for the first folder matching given by the regex.
+     * Applies recurrent search using DFS
+     *
+     * @param pattern regular expression of the folder
+     * @return absolute path to the folder
+     * or empty optional if folder was not found
+     */
+
+    private static List<String> findFolders(final String pattern) {
+        return findFolders(".", pattern);
+    }
+
+    /**
+     * Searches for all folders given by regex.
+     * Applies recurrent search using DFS
+     *
+     * @param curFilename current file to scan for sub directories
+     * @param pattern regular expression of the folder
+     * @return absolute paths to the folders
+     * or empty optional if folder was not found
+     */
+
+    private static List<String> findFolders(
+            final String curFilename,
+            final String pattern
+    ) {
+        if (curFilename.matches(pattern))
+            return List.of(curFilename);
+
+        final var file = new File(curFilename);
+
+        if (file.isFile())
+            return List.of();
+
+        return Arrays.stream(Objects.requireNonNull(new File(curFilename).listFiles()))
+                .parallel()
+                .map(File::getAbsolutePath)
+                .map(p -> findFolders(p, pattern))
+                .flatMap(Collection::stream)
+                .toList();
+    }
+
+    /**
+     * Searches for the first folder given by regex.
+     * Applies recurrent search using DFS
+     *
+     * @param curFilename current file to scan for sub directories
+     * @param pattern regular expression of the folder
+     * @return absolute path to the inputs folder
+     * or empty optional if folder was not found
+     */
+
+    private static Optional<String> findFolder(
+            final String curFilename,
+            final String pattern
+    ) {
+        if (curFilename.matches(pattern))
+            return Optional.of(curFilename);
+
+        final var file = new File(curFilename);
+
+        if (file.isFile())
+            return Optional.empty();
+
+        return Arrays.stream(Objects.requireNonNull(new File(curFilename).listFiles()))
+                .parallel()
+                .map(File::getAbsolutePath)
+                .map(p -> findFolder(p, pattern))
+                .filter(Optional::isPresent)
+                .findFirst()
+                .flatMap(Function.identity());
     }
 
     /**
@@ -255,84 +441,6 @@ public final class ArsenySavchenko {
 
     private static void printWordToFile(final WordState wordState, final PrintWriter writer) {
         writer.printf("%d %d %d\n", wordState.startRow, wordState.startColumn, wordState.layout);
-    }
-
-    /**
-     * Generates crossword for the given file
-     * @param filename given input file name
-     * @return obtained table, if generation is successful
-     */
-
-    private static Optional<TableState> generateForFile(final String filename) {
-        try (final var reader = new BufferedReader(new FileReader(inputFilename(filename)))) {
-            final var words = readWords(reader);
-            final var random = SecureRandom.getInstanceStrong();
-            var genSteps = 1;
-
-            // -------- Generation loop --------
-
-            for (var population = initialPopulation(words, random);; ++genSteps) {
-                final var selected = selectWithRoulette(population, random);
-                population = nextPopulation(selected, random);
-
-                final var fitnessValues = fitnessValues(population);
-                final var maxFitness = maxFitness(fitnessValues);
-
-                // 1 + 1 <- graph connectivity + words crossing & not following
-
-                if (maxFitness.fitness >= 2F) {
-                    if (DEBUG) System.out.printf(
-                            "DONE for %s in %d generation steps\n",
-                            filename, genSteps
-                    );
-
-                    final var res = population.get(maxFitness.index);
-                    if (DEBUG) printTable(population.get(maxFitness.index).table);
-
-                    final var fixedOrder = reorderWordStates(words, res.words);
-                    return Optional.of(new TableState(res.table, fixedOrder));
-                }
-            }
-        } catch (final Exception ignored) {
-            return Optional.empty();
-        }
-    }
-
-    /**
-     * Reads words from input file and filters empty strings
-     * @param reader file reader
-     * @return input files
-     */
-
-    private static List<String> readWords(final BufferedReader reader) {
-        return reader.lines().filter(l -> !l.isEmpty() && !l.isBlank()).toList();
-    }
-
-    /**
-     * Calculates maximum fitness value with the corresponding index
-     * @param fitnessValues the list of fitness values
-     * @return the maximum fitness value and its corresponding index
-     */
-
-    private static FitnessWithIndex maxFitness(final List<Float> fitnessValues) {
-        return IntStream
-                .range(0, fitnessValues.size())
-                .mapToObj(i -> new FitnessWithIndex(fitnessValues.get(i), i))
-                .max((a, b) -> Float.compare(a.fitness, b.fitness))
-                .orElseGet(() -> new FitnessWithIndex(fitnessValues.get(0), 0));
-    }
-
-    /**
-     * Prints the given table state to the console
-     * @param table table to be printed
-     */
-
-    private static void printTable(final char[][] table) {
-        for (final var row : table) {
-            for (final var c : row)
-                System.out.printf("%c ", c == 0 ? '_' : c);
-            System.out.println();
-        }
     }
 
     // ---------------------------- INITIAL POPULATION ----------------------------
