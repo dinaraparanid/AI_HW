@@ -1,4 +1,4 @@
-package assignment2.students;
+package assignment2.students.ArsenySavchenko;
 
 import java.io.*;
 import java.security.SecureRandom;
@@ -9,7 +9,7 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
-public final class Main {
+public final class ArsenySavchenko {
     private static final int TABLE_SIZE = 20;
     private static final int POPULATION_SIZE = 100;
 
@@ -21,6 +21,10 @@ public final class Main {
 
     private static final float INCLUDE_PARENT_PROBABILITY = 0.25F;
     private static final float MUTATION_RATE = 0.33F;
+
+    private static final String PATH = "src/main/java/assignment2/students/ArsenySavchenko";
+
+    private static final boolean DEBUG = true;
 
     // ------------------------- DATA HOLDERS -------------------------
 
@@ -145,11 +149,26 @@ public final class Main {
     // ------------------------- GENERATION -------------------------
 
     public static void main(final String[] args) {
-        Arrays
-                .stream(inputFiles())
-                .map(filename -> new FilenameWithGenerationResult(filename, generateForFile(filename)))
-                .filter(res -> res.result.isPresent())
-                .forEach(fileWithTable -> printTableToFile(fileWithTable.result.get(), fileWithTable.filename));
+        System.out.printf(
+                "Required outputs folder: %s\n",
+                new File(String.format("%s/outputs", PATH)).getAbsolutePath()
+        );
+
+        System.out.printf("Created: %s\n", new File(String.format("%s/outputs", PATH)).mkdir());
+
+        try {
+            Arrays
+                    .stream(inputFiles())
+                    .parallel()
+                    .map(filename -> new FilenameWithGenerationResult(filename, generateForFile(filename)))
+                    .filter(res -> res.result.isPresent())
+                    .forEach(fileWithTable -> printTableToFile(fileWithTable.result.get(), fileWithTable.filename));
+        } catch (final NullPointerException e) {
+            System.out.println(
+                    "Input and output folders are not found." +
+                    " Please, edit PATH variable (ArsenySavchenko.java:25) in the code"
+            );
+        }
     }
 
     /**
@@ -158,9 +177,14 @@ public final class Main {
      */
 
     private static String[] inputFiles() {
+        System.out.printf(
+                "Required inputs folder: %s\n",
+                new File(String.format("%s/inputs", PATH)).getAbsolutePath()
+        );
+
         return Objects.requireNonNull(
-                new File(".")
-                        .list((dir, name) -> name.matches("input[0-9]+\\.txt"))
+                new File(String.format("%s/inputs", PATH))
+                        .list((dir, name) -> name.matches(".*input[0-9]+\\.txt"))
         );
     }
 
@@ -181,13 +205,24 @@ public final class Main {
     }
 
     /**
+     * Generates the input filename based on the simple name
+     * (e.g. input.txt -> inputs/input.txt)
+     * @param filename simple input filename
+     * @return corresponding output filename
+     */
+
+    private static String inputFilename(final String filename) {
+        return String.format("%s/inputs/input%d.txt", PATH, fileNumber(filename));
+    }
+
+    /**
      * Generates the output filename based on the provided input filename
-     * @param inputFilename The input filename
-     * @return The corresponding output filename
+     * @param inputFilename input filename itself
+     * @return corresponding output filename
      */
 
     private static String outputFilename(final String inputFilename) {
-        return "output" + fileNumber(inputFilename) + ".txt";
+        return String.format("%s/outputs/output%d.txt", PATH, fileNumber(inputFilename));
     }
 
     /**
@@ -229,7 +264,7 @@ public final class Main {
      */
 
     private static Optional<TableState> generateForFile(final String filename) {
-        try (final var reader = new BufferedReader(new FileReader(filename))) {
+        try (final var reader = new BufferedReader(new FileReader(inputFilename(filename)))) {
             final var words = readWords(reader);
             final var random = SecureRandom.getInstanceStrong();
             var genSteps = 1;
@@ -246,13 +281,13 @@ public final class Main {
                 // 1 + 1 <- graph connectivity + words crossing & not following
 
                 if (maxFitness.fitness >= 2F) {
-                    System.out.printf("DONE for %s in %d generation steps (fitness = %f)\n", filename, genSteps, maxFitness.fitness);
+                    if (DEBUG) System.out.printf(
+                            "DONE for %s in %d generation steps\n",
+                            filename, genSteps
+                    );
 
                     final var res = population.get(maxFitness.index);
-                    printTable(population.get(maxFitness.index).table);
-
-                    final var avgFitness = averageFitness(fitnessValues);
-                    printFitnessValues(maxFitness.fitness, avgFitness);
+                    if (DEBUG) printTable(population.get(maxFitness.index).table);
 
                     final var fixedOrder = reorderWordStates(words, res.words);
                     return Optional.of(new TableState(res.table, fixedOrder));
@@ -920,7 +955,7 @@ public final class Main {
      */
 
     private static List<TableFitnessState> fitnessStates(final List<TableState> population) {
-        return population.stream().map(Main::fitness).toList();
+        return population.stream().map(ArsenySavchenko::fitness).toList();
     }
 
     /**
@@ -1077,7 +1112,7 @@ public final class Main {
      * @param current The current word state being visited.
      * @param set The set of visited word states.
      * @param wordsCrosses A map representing word intersections
-     * @see Main#dfs(WordState, Map)
+     * @see ArsenySavchenko#dfs(WordState, Map)
      */
 
     private static void dfsImpl(
@@ -1265,7 +1300,7 @@ public final class Main {
     /**
      * Generates the next population of table states
      * based on the selected parents.
-     * Applies both {@link Main#crossover(TableState, TableState, Random)} and {@link Main#mutation(TableState, Random)}
+     * Applies both {@link ArsenySavchenko#crossover(TableState, TableState, Random)} and {@link ArsenySavchenko#mutation(TableState, Random)}
      *
      * @param selected selected table states to improve
      * @param random random generator
@@ -1285,9 +1320,9 @@ public final class Main {
 
     /**
      * Generates a collection of child table states
-     * by performing Applies both {@link Main#crossover(TableState, TableState, Random)}
-     * and {@link Main#mutation(TableState, Random)} on selected parents.
-     * With probability of {@link Main#INCLUDE_PARENT_PROBABILITY},
+     * by performing Applies both {@link ArsenySavchenko#crossover(TableState, TableState, Random)}
+     * and {@link ArsenySavchenko#mutation(TableState, Random)} on selected parents.
+     * With probability of {@link ArsenySavchenko#INCLUDE_PARENT_PROBABILITY},
      * may pick one random parent.
      *
      * @param selected selected table states
@@ -1320,7 +1355,7 @@ public final class Main {
      * Performs crossover between two parent tables to generate an offspring table state.
      * Algorithm alternates words between two tables, attempting to place them in the same position
      * as it was in the parent. In case of failure, it tries to cross any word that is already in the table.
-     * If fails again, randomly picks any position using {@link Main#wordState(String, char[][], Collection, Collection, Random)}
+     * If fails again, randomly picks any position using {@link ArsenySavchenko#wordState(String, char[][], Collection, Collection, Random)}
      *
      * @param parent1 the first parent table state
      * @param parent2 the second parent table state
@@ -1344,7 +1379,7 @@ public final class Main {
      * Generates the offspring list of words, produced from the given parent tables.
      * Algorithm alternates words between two tables, attempting to place them in the same position
      * as it was in the parent. In case of failure, it tries to cross any word that is already in the table.
-     * If fails again, randomly picks any position using {@link Main#wordState(String, char[][], Collection, Collection, Random)}
+     * If fails again, randomly picks any position using {@link ArsenySavchenko#wordState(String, char[][], Collection, Collection, Random)}
      *
      * @param parent1 the first parent table state
      * @param parent2 the second parent table state
@@ -1353,7 +1388,7 @@ public final class Main {
      * @param verticalWords vertical words placed in the table
      * @param random random generator
      * @return The offspring table state
-     * @see Main#crossover(TableState, TableState, Random)
+     * @see ArsenySavchenko#crossover(TableState, TableState, Random)
      */
 
     private static List<WordState> crossoverWordStates(
@@ -1375,14 +1410,14 @@ public final class Main {
      * Generates the offspring word based on already placed words in the table.
      * Algorithm alternates words between two tables, attempting to place them in the same position
      * as it was in the parent. In case of failure, it tries to cross any word that is already in the table.
-     * If fails again, randomly picks any position using {@link Main#wordState(String, char[][], Collection, Collection, Random)}
+     * If fails again, randomly picks any position using {@link ArsenySavchenko#wordState(String, char[][], Collection, Collection, Random)}
      *
      * @param table table to place the word
      * @param horizontalWords horizontal words placed in the table
      * @param verticalWords vertical words placed in the table
      * @param random random generator
      * @return The offspring table state
-     * @see Main#crossoverWordStates(TableState, TableState, char[][], Collection, Collection, Random)
+     * @see ArsenySavchenko#crossoverWordStates(TableState, TableState, char[][], Collection, Collection, Random)
      */
 
     private static WordState crossoverWordState(
@@ -1493,7 +1528,7 @@ public final class Main {
      * @param horizontalWords horizontal words placed in the table
      * @param verticalWords vertical words placed in the table
      * @return the same word state, if placement is successful
-     * @see Main#tryCrossingStartCoords(String, char[][], Collection, Collection)
+     * @see ArsenySavchenko#tryCrossingStartCoords(String, char[][], Collection, Collection)
      */
 
     private static Optional<CoordsWithLayout> tryCrossingStartCoordsHorizontal(
@@ -1526,7 +1561,7 @@ public final class Main {
      * @param horizontalWords horizontal words placed in the table
      * @param verticalWords vertical words placed in the table
      * @return the same word state, if placement is successful
-     * @see Main#tryCrossingStartCoords(String, char[][], Collection, Collection)
+     * @see ArsenySavchenko#tryCrossingStartCoords(String, char[][], Collection, Collection)
      */
 
     private static Optional<CoordsWithLayout> tryCrossingStartCoordsVertical(
@@ -1552,9 +1587,9 @@ public final class Main {
     /**
      * Generates a stream of possible intersection points
      * for a word based on the coordinates of existing word states.
-     * Computes coordinates of every word using {@link Main#wordCoordsMap(WordState)},
+     * Computes coordinates of every word using {@link ArsenySavchenko#wordCoordsMap(WordState)},
      * then filters coordinates of characters that are present in word,
-     * using {@link Main#filterLetterMap(String, Map)}
+     * using {@link ArsenySavchenko#filterLetterMap(String, Map)}
      *
      * @param word the word that has to be intersected
      * @param directedWords the list of directed word states (either horizontal or vertical)
@@ -1567,7 +1602,7 @@ public final class Main {
     ) {
         return directedWords
                 .stream()
-                .map(Main::wordCoordsMap)
+                .map(ArsenySavchenko::wordCoordsMap)
                 .flatMap(letterMap -> filterLetterMap(word, letterMap));
     }
 
@@ -1576,7 +1611,7 @@ public final class Main {
      * @param word word to check for connection points
      * @param letterMap map associating each letter with a list of corresponding coordinates
      * @return stream representing the potential connection points
-     * @see Main#possibleConnectionsStream(String, Collection)
+     * @see ArsenySavchenko#possibleConnectionsStream(String, Collection)
      */
 
     private static Stream<Coords> filterLetterMap(
@@ -1676,7 +1711,7 @@ public final class Main {
      * @param connection the connection point coordinates
      * @return obtained starting coordinates with a horizontal layout,
      * if word can be placed with an intersection.
-     * @see Main#tryCrossingStartCoordsHorizontal(String, char[][], Collection, Collection)
+     * @see ArsenySavchenko#tryCrossingStartCoordsHorizontal(String, char[][], Collection, Collection)
      */
 
     private static Optional<CoordsWithLayout> possibleStartCoordsHorizontal(final String word, final Coords connection) {
@@ -1695,7 +1730,7 @@ public final class Main {
      * @param connection the connection point coordinates
      * @return obtained starting coordinates with a vertical layout,
      * if word can be placed with an intersection.
-     * @see Main#tryCrossingStartCoordsVertical(String, char[][], Collection, Collection)
+     * @see ArsenySavchenko#tryCrossingStartCoordsVertical(String, char[][], Collection, Collection)
      */
 
     private static Optional<CoordsWithLayout> possibleStartCoordsVertical(final String word, final Coords connection) {
@@ -1709,16 +1744,16 @@ public final class Main {
 
     /**
      * Performs mutation on a table state, introducing changes to its word placements.
-     * Algorithm searches all connectivity components, using {@link Main#connectivityComponents(List)},
+     * Algorithm searches all connectivity components, using {@link ArsenySavchenko#connectivityComponents(List)},
      * picks the last one as the component, from which first ceil(size * MUTATION_RATE)
      * words have to be intersected with other connectivity components.
      * For such mutated words, it tries to cross them with others,
-     * using {@link Main#mergedOrNewWords(Collection, char[][], Collection, Collection, Random)}.
+     * using {@link ArsenySavchenko#mergedOrNewWords(Collection, char[][], Collection, Collection, Random)}.
      * In case of failure, position remains the same.
      *
      * @param tableState the table state to mutate
      * @return the mutated table state with improved fitness value
-     * @see Main#nextChildWithMbParent(List, Random)
+     * @see ArsenySavchenko#nextChildWithMbParent(List, Random)
      */
 
     private static TableState mutation(final TableState tableState, final Random random) {
@@ -1750,7 +1785,7 @@ public final class Main {
      * @param connectivityComponents list of sets of words that are connected
      * @param random random generator
      * @return lists of both mutated words and not mutated words
-     * @see Main#mutation(TableState, Random)
+     * @see ArsenySavchenko#mutation(TableState, Random)
      */
 
     private static MutationSelection mutationSelection(
@@ -1779,7 +1814,7 @@ public final class Main {
      * @param horizontalWords list of horizontal word states
      * @param verticalWords list of vertical word states
      * @return list of word states, either merged or kept the same
-     * @see Main#mutation(TableState, Random)
+     * @see ArsenySavchenko#mutation(TableState, Random)
      */
 
     private static List<WordState> mergedOrNewWords(
@@ -1845,7 +1880,7 @@ public final class Main {
      *
      * @param wordStates list of word states
      * @return list of sets of word states representing the connected components
-     * @see Main#connectivityComponents(Map)
+     * @see ArsenySavchenko#connectivityComponents(Map)
      */
 
     private static List<Set<WordState>> connectivityComponents(final List<WordState> wordStates) {
